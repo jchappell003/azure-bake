@@ -5,8 +5,9 @@ import ARMTemplate from "./storage.json"
 import stockAlerts from "./stockAlerts.json"
 import { StorageUtils } from "./functions.js";
 import { StorageManagementClient } from "@azure/arm-storage"
-import { ServiceURL, StorageURL, SharedKeyCredential, Aborter } from "@azure/storage-blob"
+import { StorageSharedKeyCredential, BlobServiceClient } from "@azure/storage-blob"
 import ARMTemplateNetwork from "./storageNetwork.json"
+import ARMTemplateDataLake from "./storageDatalake.json"
 
 export class StoragePlugIn extends BaseIngredient {
     public async Execute(): Promise<void> {
@@ -23,9 +24,17 @@ export class StoragePlugIn extends BaseIngredient {
                 await helper.DeployTemplate(this._name, ARMTemplateNetwork, params, await util.resource_group())
                 //there is a limitation around the copy function in the current architecture
 
-            }else{
+            }else if(params['IsHNSEnabled'])
+            {
+                await helper.DeployTemplate(this._name, ARMTemplateDataLake, params, await util.resource_group())
+            }
+            else
+            {
                 await helper.DeployTemplate(this._name, ARMTemplate, params, await util.resource_group())
             }
+
+
+
 
             await this.ConfigureDiagnosticSettings(params, util);
 
@@ -46,14 +55,11 @@ export class StoragePlugIn extends BaseIngredient {
         accountName = params["storageAccountName"].value;
         const storageUtils = new StorageUtils(this._ctx);
         accountKey = await storageUtils.get_primary_key(accountName, await util.resource_group())
-        const credentials = new SharedKeyCredential(accountName, accountKey);
-        const pipeline = StorageURL.newPipeline(credentials, {
-            // Enable logger when debugging
-            // logger: new ConsoleHttpPipelineLogger(HttpPipelineLogLevel.INFO)
-        });
+        const credentials = new StorageSharedKeyCredential(accountName, accountKey);
         const blobPrimaryURL = `https://${accountName}.blob.core.windows.net/`;
-        var serviceURL = new ServiceURL(blobPrimaryURL, pipeline)
-        const serviceProperties = await serviceURL.getProperties(Aborter.none);
+
+        const blobClient = new BlobServiceClient(blobPrimaryURL, credentials);
+        const serviceProperties = await blobClient.getProperties()
 
         //Get Bake variables for diagnostic settings.  Default to "true" (enabled) and 10 days data retention.
         let blobDiagnosticHourlyMetricsEnabled: string = await util.variable("blobDiagnosticHourlyMetricsEnabled") || "true"
@@ -107,7 +113,7 @@ export class StoragePlugIn extends BaseIngredient {
         }
 
         //Configure logging settings
-        serviceProperties.logging = {
+        serviceProperties.blobAnalyticsLogging = {
             deleteProperty: boolBlobDiagnosticLoggingEnabled,
             read: boolBlobDiagnosticLoggingEnabled,
             retentionPolicy: {
@@ -124,6 +130,6 @@ export class StoragePlugIn extends BaseIngredient {
         }
 
         //Post blob service properties back to Azure
-        await serviceURL.setProperties(Aborter.none, serviceProperties);
+        await blobClient.setProperties(serviceProperties)
     }
 }
